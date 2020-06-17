@@ -1,5 +1,5 @@
 %%-*- mode: erlang -*-
-%% EMQ X R3.0 config mapping
+%% EMQ X R4.0 config mapping
 
 %%--------------------------------------------------------------------
 %% Cluster
@@ -477,9 +477,19 @@ end}.
   {datatype, integer}
 ]}.
 
+{mapping, "log.rotation", "kernel.logger", [
+  {default, on},
+  {datatype, flag}
+]}.
+
 {mapping, "log.rotation.size", "kernel.logger", [
   {default, "10MB"},
   {datatype, bytesize}
+]}.
+
+{mapping, "log.size", "kernel.logger", [
+  {default, infinity},
+  {datatype, [bytesize, atom]}
 ]}.
 
 {mapping, "log.rotation.count", "kernel.logger", [
@@ -489,6 +499,46 @@ end}.
 
 {mapping, "log.$level.file", "kernel.logger", [
   {datatype, file}
+]}.
+
+{mapping, "log.sync_mode_qlen", "kernel.logger", [
+  {default, 100},
+  {datatype, integer}
+]}.
+
+{mapping, "log.drop_mode_qlen", "kernel.logger", [
+  {default, 3000},
+  {datatype, integer}
+]}.
+
+{mapping, "log.flush_qlen", "kernel.logger", [
+  {default, 8000},
+  {datatype, integer}
+]}.
+
+{mapping, "log.overload_kill", "kernel.logger", [
+  {default, on},
+  {datatype, flag}
+]}.
+
+{mapping, "log.overload_kill_mem_size", "kernel.logger", [
+  {default, "30MB"},
+  {datatype, bytesize}
+]}.
+
+{mapping, "log.overload_kill_qlen", "kernel.logger", [
+  {default, 20000},
+  {datatype, integer}
+]}.
+
+{mapping, "log.overload_kill_restart_after", "kernel.logger", [
+  {default, "5s"},
+  {datatype, [{duration, ms}, atom]}
+]}.
+
+{mapping, "log.burst_limit", "kernel.logger", [
+  {default, "disabled"},
+  {datatype, string}
 ]}.
 
 {mapping, "log.sasl", "sasl.sasl_error_logger", [
@@ -521,6 +571,10 @@ end}.
 {translation, "kernel.logger", fun(Conf) ->
     LogTo = cuttlefish:conf_get("log.to", Conf),
     LogLevel = cuttlefish:conf_get("log.level", Conf),
+    LogType = case cuttlefish:conf_get("log.rotation", Conf) of
+                  true -> wrap;
+                  false -> halt
+              end,
     CharsLimit = case cuttlefish:conf_get("log.chars_limit", Conf) of
                      -1 -> unlimited;
                      V -> V
@@ -537,11 +591,37 @@ end}.
                               []}]},
                        msg,"\n"],
                     chars_limit => CharsLimit}},
+    {BustLimitOn, {MaxBurstCount, TimeWindow}} =
+        case string:tokens(cuttlefish:conf_get("log.burst_limit", Conf), ", ") of
+            ["disabled"] -> {false, {20000, 1000}};
+            [Count, Window] ->
+                {true, {list_to_integer(Count),
+                        case cuttlefish_duration:parse(Window, ms) of
+                          Secs when is_integer(Secs) -> Secs;
+                          {error, Reason1} -> error(Reason1)
+                        end}}
+        end,
     FileConf =  fun(Filename) ->
-                  #{type => wrap,
+                  BasicConf =
+                  #{type => LogType,
                     file => filename:join(cuttlefish:conf_get("log.dir", Conf), Filename),
                     max_no_files => cuttlefish:conf_get("log.rotation.count", Conf),
-                    max_no_bytes => cuttlefish:conf_get("log.rotation.size", Conf)}
+                    sync_mode_qlen => cuttlefish:conf_get("log.sync_mode_qlen", Conf),
+                    drop_mode_qlen => cuttlefish:conf_get("log.drop_mode_qlen", Conf),
+                    flush_qlen => cuttlefish:conf_get("log.flush_qlen", Conf),
+                    overload_kill_enable => cuttlefish:conf_get("log.overload_kill", Conf),
+                    overload_kill_qlen => cuttlefish:conf_get("log.overload_kill_qlen", Conf),
+                    overload_kill_mem_size => cuttlefish:conf_get("log.overload_kill_mem_size", Conf),
+                    overload_kill_restart_after => cuttlefish:conf_get("log.overload_kill_restart_after", Conf),
+                    burst_limit_enable => BustLimitOn,
+                    burst_limit_max_count => MaxBurstCount,
+                    burst_limit_window_time => TimeWindow
+                    },
+                  MaxNoBytes = case LogType of
+                    wrap -> cuttlefish:conf_get("log.rotation.size", Conf);
+                    halt -> cuttlefish:conf_get("log.size", Conf)
+                  end,
+                  BasicConf#{max_no_bytes => MaxNoBytes}
                 end,
 
     %% For the default logger that outputs to console
@@ -939,6 +1019,12 @@ end}.
   {datatype, {enum, [true, false]}}
 ]}.
 
+%% @doc Whether to bypass the authentication step
+{mapping, "zone.$name.bypass_auth_plugins", "emqx.zones", [
+  {default, false},
+  {datatype, {enum, [true, false]}}
+]}.
+
 {translation, "emqx.zones", fun(Conf) ->
   Mapping = fun("publish_limit", Val) ->
                     [L, D] = string:tokens(Val, ", "),
@@ -991,6 +1077,8 @@ end}.
                                         end, #{}, string:tokens(Val, ",")),
                             {mqueue_priorities, MqueuePriorities}
                     end;
+               ("mountpoint", Val) ->	
+                   {mountpoint, iolist_to_binary(Val)};
                (Opt, Val) ->
                     {list_to_atom(Opt), Val}
             end,
@@ -1302,16 +1390,6 @@ end}.
   {datatype, flag}
 ]}.
 
-{mapping, "listener.ws.$name.proxy_address_header", "emqx.listeners", [
-  {datatype, string},
-  hidden
-]}.
-
-{mapping, "listener.ws.$name.proxy_port_header", "emqx.listeners", [
-  {datatype, string},
-  hidden
-]}.
-
 {mapping, "listener.ws.$name.proxy_protocol", "emqx.listeners", [
   {datatype, flag}
 ]}.
@@ -1457,16 +1535,6 @@ end}.
 
 {mapping, "listener.wss.$name.access.$id", "emqx.listeners", [
   {datatype, string}
-]}.
-
-{mapping, "listener.wss.$name.proxy_address_header", "emqx.listeners", [
-  {datatype, string},
-  hidden
-]}.
-
-{mapping, "listener.wss.$name.proxy_port_header", "emqx.listeners", [
-  {datatype, string},
-  hidden
 ]}.
 
 {mapping, "listener.wss.$name.proxy_protocol", "emqx.listeners", [
@@ -1673,11 +1741,9 @@ end}.
                           {proxy_protocol_timeout, cuttlefish:conf_get(Prefix ++ ".proxy_protocol_timeout", Conf, undefined)},
                           {verify_protocol_header, cuttlefish:conf_get(Prefix ++ ".verify_protocol_header", Conf, undefined)},
                           {peer_cert_as_username, cuttlefish:conf_get(Prefix ++ ".peer_cert_as_username", Conf, undefined)},
-                          {proxy_port_header, cuttlefish:conf_get(Prefix ++ ".proxy_port_header", Conf, undefined)},
                           {compress, cuttlefish:conf_get(Prefix ++ ".compress", Conf, undefined)},
                           {idle_timeout, cuttlefish:conf_get(Prefix ++ ".idle_timeout", Conf, undefined)},
-                          {max_frame_size, cuttlefish:conf_get(Prefix ++ ".max_frame_size", Conf, undefined)},
-                          {proxy_address_header, cuttlefish:conf_get(Prefix ++ ".proxy_address_header", Conf, undefined)} | AccOpts(Prefix)])
+                          {max_frame_size, cuttlefish:conf_get(Prefix ++ ".max_frame_size", Conf, undefined)} | AccOpts(Prefix)])
               end,
     DeflateOpts = fun(Prefix) ->
                       Filter([{level, cuttlefish:conf_get(Prefix ++ ".deflate_opts.level", Conf, undefined)},
@@ -1780,20 +1846,14 @@ end}.
 %% Modules
 %%--------------------------------------------------------------------
 
-{mapping, "module.presence", "emqx.modules", [
-  {default, off},
-  {datatype, flag}
+{mapping, "modules.loaded_file", "emqx.modules_loaded_file", [
+  {datatype, string}
 ]}.
 
 {mapping, "module.presence.qos", "emqx.modules", [
   {default, 1},
   {datatype, integer},
   {validators, ["range:0-2"]}
-]}.
-
-{mapping, "module.subscription", "emqx.modules", [
-  {default, off},
-  {datatype, flag}
 ]}.
 
 {mapping, "module.subscription.$id.topic", "emqx.modules", [
@@ -1806,9 +1866,22 @@ end}.
   {validators, ["range:0-2"]}
 ]}.
 
-{mapping, "module.rewrite", "emqx.modules", [
-  {default, off},
-  {datatype, flag}
+{mapping, "module.subscription.$id.nl", "emqx.modules", [
+  {default, 0},
+  {datatype, integer},
+  {validators, ["range:0-1"]}
+]}.
+
+{mapping, "module.subscription.$id.rap", "emqx.modules", [
+  {default, 0},
+  {datatype, integer},
+  {validators, ["range:0-1"]}
+]}.
+
+{mapping, "module.subscription.$id.rh", "emqx.modules", [
+  {default, 0},
+  {datatype, integer},
+  {validators, ["range:0-2"]}
 ]}.
 
 {mapping, "module.rewrite.rule.$id", "emqx.modules", [
@@ -1818,10 +1891,12 @@ end}.
 {translation, "emqx.modules", fun(Conf) ->
   Subscriptions = fun() ->
       List = cuttlefish_variable:filter_by_prefix("module.subscription", Conf),
-      QosList = [Qos || {_, Qos} <- lists:sort([{I, Qos} || {[_,"subscription", I,"qos"], Qos} <- List])],
-      TopicList = [iolist_to_binary(Topic) || {_, Topic} <-
-        lists:sort([{I, Topic} || {[_,"subscription", I, "topic"], Topic} <- List])],
-      lists:zip(TopicList, QosList)
+      TopicList = [{N, Topic}|| {[_,"subscription",N,"topic"], Topic} <- List],
+      [{iolist_to_binary(T), #{ qos => cuttlefish:conf_get("module.subscription." ++ N ++ ".qos", Conf, 0),
+                                nl  => cuttlefish:conf_get("module.subscription." ++ N ++ ".nl", Conf, 0),
+                                rap => cuttlefish:conf_get("module.subscription." ++ N ++ ".rap", Conf, 0),
+                                rh  => cuttlefish:conf_get("module.subscription." ++ N ++ ".rh", Conf, 0)
+                                }} || {N, T} <- TopicList]
   end,
   Rewrites = fun() ->
       Rules = cuttlefish_variable:filter_by_prefix("module.rewrite.rule", Conf),
@@ -1831,18 +1906,12 @@ end}.
                 end, Rules)
   end,
   lists:append([
-    case cuttlefish:conf_get("module.presence", Conf) of %% Presence
-        true  -> [{emqx_mod_presence, [{qos, cuttlefish:conf_get("module.presence.qos", Conf, 1)}]}];
-        false -> []
-    end,
-    case cuttlefish:conf_get("module.subscription", Conf) of %% Subscription
-        true  -> [{emqx_mod_subscription, Subscriptions()}];
-        false -> []
-    end,
-    case cuttlefish:conf_get("module.rewrite", Conf) of %% Rewrite
-        true  -> [{emqx_mod_rewrite, Rewrites()}];
-        false -> []
-    end
+    [{emqx_mod_presence, [{qos, cuttlefish:conf_get("module.presence.qos", Conf, 1)}]}],
+    [{emqx_mod_subscription, Subscriptions()}],
+    [{emqx_mod_rewrite, Rewrites()}],
+    [{emqx_mod_topic_metrics, []}],
+    [{emqx_mod_delayed, []}],
+    [{emqx_mod_acl_internal, []}]
   ])
 end}.
 

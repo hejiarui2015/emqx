@@ -319,7 +319,7 @@ handle_msg({'$gen_call', From, Req}, State) ->
     end;
 
 handle_msg({Inet, _Sock, Data}, State) when Inet == tcp; Inet == ssl ->
-    ?LOG(debug, "RECV ~p", [Data]),
+    ?LOG(debug, "RECV ~0p", [Data]),
     Oct = iolist_size(Data),
     emqx_pd:inc_counter(incoming_bytes, Oct),
     ok = emqx_metrics:inc('bytes.received', Oct),
@@ -476,13 +476,18 @@ handle_timeout(_TRef, emit_stats, State =
     emqx_cm:set_chan_stats(ClientId, stats(State)),
     {ok, State#state{stats_timer = undefined}};
 
-handle_timeout(TRef, keepalive, State =
-               #state{transport = Transport, socket = Socket}) ->
-    case Transport:getstat(Socket, [recv_oct]) of
-        {ok, [{recv_oct, RecvOct}]} ->
-            handle_timeout(TRef, {keepalive, RecvOct}, State);
-        {error, Reason} ->
-            handle_info({sock_error, Reason}, State)
+handle_timeout(TRef, keepalive, State = #state{transport = Transport,
+                                               socket = Socket,
+                                               channel = Channel})->
+    case emqx_channel:info(conn_state, Channel) of
+        disconnected -> {ok, State};
+        _ ->
+            case Transport:getstat(Socket, [recv_oct]) of
+                {ok, [{recv_oct, RecvOct}]} ->
+                    handle_timeout(TRef, {keepalive, RecvOct}, State);
+                {error, Reason} ->
+                    handle_info({sock_error, Reason}, State)
+            end
     end;
 
 handle_timeout(TRef, Msg, State) ->
@@ -508,7 +513,7 @@ parse_incoming(Data, Packets, State = #state{parse_state = ParseState}) ->
             parse_incoming(Rest, [Packet|Packets], NState)
     catch
         error:Reason:Stk ->
-            ?LOG(error, "~nParse failed for ~p~n~p~nFrame data:~p",
+            ?LOG(error, "~nParse failed for ~0p~n~0p~nFrame data:~0p",
                  [Reason, Stk, Data]),
             {[{frame_error, Reason}|Packets], State}
     end.
@@ -617,7 +622,7 @@ ensure_rate_limit(Stats, State = #state{limiter = Limiter}) ->
         {ok, Limiter1} ->
             State#state{limiter = Limiter1};
         {pause, Time, Limiter1} ->
-            ?LOG(debug, "Pause ~pms due to rate limit", [Time]),
+            ?LOG(warning, "Pause ~pms due to rate limit", [Time]),
             TRef = start_timer(Time, limit_timeout),
             State#state{sockstate   = blocked,
                         limiter     = Limiter1,

@@ -47,6 +47,7 @@
              , subopts/0
              , reason_code/0
              , alias_id/0
+             , topic_aliases/0
              , properties/0
              ]).
 
@@ -90,7 +91,9 @@
 
 -type(ver() :: ?MQTT_PROTO_V3
              | ?MQTT_PROTO_V4
-             | ?MQTT_PROTO_V5).
+             | ?MQTT_PROTO_V5
+             | non_neg_integer()).
+
 -type(qos() :: ?QOS_0 | ?QOS_1 | ?QOS_2).
 -type(qos_name() :: qos0 | at_most_once |
                     qos1 | at_least_once |
@@ -106,7 +109,7 @@
 -type(conninfo() :: #{socktype := socktype(),
                       sockname := peername(),
                       peername := peername(),
-                      peercert := esockd_peercert:peercert(),
+                      peercert := nossl | undefined | esockd_peercert:peercert(),
                       conn_mod := module(),
                       proto_name := binary(),
                       proto_ver := ver(),
@@ -115,7 +118,7 @@
                       username := username(),
                       conn_props := properties(),
                       connected := boolean(),
-                      connected_at := erlang:timestamp(),
+                      connected_at := non_neg_integer(),
                       keepalive := 0..16#FFFF,
                       receive_maximum := non_neg_integer(),
                       expiry_interval := non_neg_integer(),
@@ -127,7 +130,6 @@
                         sockport     := non_neg_integer(),
                         clientid     := clientid(),
                         username     := username(),
-                        peercert     := esockd_peercert:peercert(),
                         is_bridge    := boolean(),
                         is_superuser := boolean(),
                         mountpoint   := maybe(binary()),
@@ -135,6 +137,8 @@
                         password     => maybe(binary()),
                         auth_result  => auth_result(),
                         anonymous    => boolean(),
+                        cn           => binary(),
+                        dn           => binary(),
                         atom()       => term()
                        }).
 -type(clientid() :: binary()|atom()).
@@ -165,6 +169,8 @@
 -type(reason_code() :: 0..16#FF).
 -type(packet_id() :: 1..16#FFFF).
 -type(alias_id() :: 0..16#FFFF).
+-type(topic_aliases() :: #{inbound => maybe(map()),
+                           outbound => maybe(map())}).
 -type(properties() :: #{atom() => term()}).
 -type(topic_filters() :: list({topic(), subopts()})).
 -type(packet() :: #mqtt_packet{}).

@@ -191,7 +191,13 @@ init(Req, Opts) ->
     end.
 
 websocket_init([Req, Opts]) ->
-    Peername = cowboy_req:peer(Req),
+    Peername = case proplists:get_bool(proxy_protocol, Opts)
+                    andalso maps:get(proxy_header, Req) of
+                   #{src_address := SrcAddr, src_port := SrcPort} ->
+                       {SrcAddr, SrcPort};
+                   _ ->
+                       cowboy_req:peer(Req)
+               end,
     Sockname = cowboy_req:sock(Req),
     Peercert = cowboy_req:cert(Req),
     WsCookie = try cowboy_req:parse_cookies(Req)
@@ -200,7 +206,7 @@ websocket_init([Req, Opts]) ->
                        ?LOG(error, "Illegal cookie"),
                        undefined;
                    Error:Reason ->
-                       ?LOG(error, "Failed to parse cookie, Error: ~p, Reason ~p",
+                       ?LOG(error, "Failed to parse cookie, Error: ~0p, Reason ~0p",
                             [Error, Reason]),
                        undefined
                end,
@@ -245,7 +251,7 @@ websocket_handle({binary, Data}, State) when is_list(Data) ->
     websocket_handle({binary, iolist_to_binary(Data)}, State);
 
 websocket_handle({binary, Data}, State) ->
-    ?LOG(debug, "RECV ~p", [Data]),
+    ?LOG(debug, "RECV ~0p", [Data]),
     ok = inc_recv_stats(1, iolist_size(Data)),
     NState = ensure_stats_timer(State),
     return(parse_incoming(Data, NState));
@@ -414,7 +420,7 @@ ensure_rate_limit(Stats, State = #state{limiter = Limiter}) ->
         {ok, Limiter1} ->
             State#state{limiter = Limiter1};
         {pause, Time, Limiter1} ->
-            ?LOG(debug, "Pause ~pms due to rate limit", [Time]),
+            ?LOG(warning, "Pause ~pms due to rate limit", [Time]),
             TRef = start_timer(Time, limit_timeout),
             NState = State#state{sockstate   = blocked,
                                  limiter     = Limiter1,
@@ -458,7 +464,7 @@ parse_incoming(Data, State = #state{parse_state = ParseState}) ->
             parse_incoming(Rest, postpone({incoming, Packet}, NState))
     catch
         error:Reason:Stk ->
-            ?LOG(error, "~nParse failed for ~p~n~p~nFrame data: ~p",
+            ?LOG(error, "~nParse failed for ~0p~n~0p~nFrame data: ~0p",
                  [Reason, Stk, Data]),
             FrameError = {frame_error, Reason},
             postpone({incoming, FrameError}, State)

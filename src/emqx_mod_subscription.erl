@@ -24,6 +24,7 @@
 %% emqx_gen_mod callbacks
 -export([ load/1
         , unload/1
+        , description/0
         ]).
 
 %% APIs
@@ -36,16 +37,21 @@
 load(Topics) ->
     emqx_hooks:add('client.connected', {?MODULE, on_client_connected, [Topics]}).
 
-on_client_connected(#{clientid := ClientId, username := Username}, _ConnInfo, Topics) ->
+on_client_connected(#{clientid := ClientId, username := Username}, _ConnInfo = #{proto_ver := ProtoVer}, Topics) ->
     Replace = fun(Topic) ->
                       rep(<<"%u">>, Username, rep(<<"%c">>, ClientId, Topic))
               end,
-    TopicFilters = [{Replace(Topic), #{qos => QoS}} || {Topic, QoS} <- Topics],
+    TopicFilters =  case ProtoVer of
+        ?MQTT_PROTO_V5 -> [{Replace(Topic), SubOpts} || {Topic, SubOpts} <- Topics];
+        _ -> [{Replace(Topic), #{qos => Qos}} || {Topic, #{qos := Qos}} <- Topics]
+    end,
     self() ! {subscribe, TopicFilters}.
 
 unload(_) ->
     emqx_hooks:del('client.connected', {?MODULE, on_client_connected}).
 
+description() ->
+    "EMQ X Subscription Module".
 %%--------------------------------------------------------------------
 %% Internal functions
 %%--------------------------------------------------------------------

@@ -62,7 +62,7 @@ receive_messages(Count, Msgs) ->
             receive_messages(Count-1, [Msg|Msgs]);
         _Other ->
             receive_messages(Count, Msgs)
-    after 100 ->
+    after 1000 ->
         Msgs
     end.
 
@@ -72,6 +72,14 @@ receive_disconnect_reasoncode() ->
         _Other -> receive_disconnect_reasoncode()
     after 100 ->
         error("no disconnect packet")
+    end.
+
+waiting_client_process_exit(C) ->
+    receive
+        {'EXIT', C, Reason} -> Reason;
+        _Oth -> error({got_another_message, _Oth})
+    after
+        1000 -> error({waiting_timeout, C})
     end.
 
 clean_retained(Topic) ->
@@ -102,6 +110,7 @@ t_basic_test(_) ->
 %%--------------------------------------------------------------------
 
 t_connect_clean_start(_) ->
+    process_flag(trap_exit, true),
     {ok, Client1} = emqtt:start_link([{clientid, <<"t_connect_clean_start">>},{proto_ver, v5},{clean_start, true}]),
     {ok, _} = emqtt:connect(Client1),
     ?assertEqual(0, client_info(session_present, Client1)),  %% [MQTT-3.1.2-4]
@@ -109,11 +118,19 @@ t_connect_clean_start(_) ->
     {ok, Client2} = emqtt:start_link([{clientid, <<"t_connect_clean_start">>},{proto_ver, v5},{clean_start, false}]),
     {ok, _} = emqtt:connect(Client2),
     ?assertEqual(1, client_info(session_present, Client2)),  %% [MQTT-3.1.2-5]
+    ?assertEqual(142, receive_disconnect_reasoncode()),
+    waiting_client_process_exit(Client1),
+
     ok = emqtt:disconnect(Client2),
+    waiting_client_process_exit(Client2),
+
     {ok, Client3} = emqtt:start_link([{clientid, <<"new_client">>},{proto_ver, v5},{clean_start, false}]),
     {ok, _} = emqtt:connect(Client3),
     ?assertEqual(0, client_info(session_present, Client3)),  %% [MQTT-3.1.2-6]
-    ok = emqtt:disconnect(Client3).
+    ok = emqtt:disconnect(Client3),
+    waiting_client_process_exit(Client3),
+
+    process_flag(trap_exit, false).
 
 t_connect_will_message(_) ->
     Topic = nth(1, ?TOPICS),
@@ -348,6 +365,7 @@ t_connect_will_delay_interval(_) ->
 
 %% [MQTT-3.1.4-3]
 t_connect_duplicate_clientid(_) ->
+    process_flag(trap_exit, true),
     {ok, Client1} = emqtt:start_link([
                                         {clientid, <<"t_connect_duplicate_clientid">>},
                                         {proto_ver, v5}
@@ -358,7 +376,12 @@ t_connect_duplicate_clientid(_) ->
                                         {proto_ver, v5}
                                         ]),
     {ok, _} = emqtt:connect(Client2),
-    ?assertEqual(142, receive_disconnect_reasoncode()).
+    ?assertEqual(142, receive_disconnect_reasoncode()),
+    waiting_client_process_exit(Client1),
+
+    ok = emqtt:disconnect(Client2),
+    waiting_client_process_exit(Client2),
+    process_flag(trap_exit, false).
 
 %%--------------------------------------------------------------------
 %% Connack
@@ -396,7 +419,7 @@ t_connack_max_qos_allowed(_) ->
 
     {ok, Client1} = emqtt:start_link([{proto_ver, v5}]),
     {ok, Connack1} = emqtt:connect(Client1),
-    ?assertEqual(0, maps:get('Maximum-QoS',Connack1)),  %% [MQTT-3.2.2-9]
+    ?assertEqual(0, maps:get('Maximum-QoS', Connack1)),  %% [MQTT-3.2.2-9]
 
     {ok, _, [0]} = emqtt:subscribe(Client1, Topic, 0),  %% [MQTT-3.2.2-10]
     {ok, _, [1]} = emqtt:subscribe(Client1, Topic, 1),  %% [MQTT-3.2.2-10]
@@ -404,6 +427,7 @@ t_connack_max_qos_allowed(_) ->
 
     {ok, _} = emqtt:publish(Client1, Topic, <<"Unsupported Qos 1">>, qos1),
     ?assertEqual(155, receive_disconnect_reasoncode()),    %% [MQTT-3.2.2-11]
+    waiting_client_process_exit(Client1),
 
     {ok, Client2} = emqtt:start_link([
                                         {proto_ver, v5},
@@ -413,7 +437,8 @@ t_connack_max_qos_allowed(_) ->
                                         {will_qos, 2}
                                         ]),
     {error, Connack2} = emqtt:connect(Client2),
-    ?assertMatch({qos_not_supported,_ }, Connack2),     %% [MQTT-3.2.2-12]
+    ?assertMatch({qos_not_supported, _}, Connack2),     %% [MQTT-3.2.2-12]
+    waiting_client_process_exit(Client2),
 
     %% max_qos_allowed = 1
     emqx_zone:set_env(external, max_qos_allowed, 1),
@@ -422,7 +447,7 @@ t_connack_max_qos_allowed(_) ->
 
     {ok, Client3} = emqtt:start_link([{proto_ver, v5}]),
     {ok, Connack3} = emqtt:connect(Client3),
-    ?assertEqual(1, maps:get('Maximum-QoS',Connack3)),  %% [MQTT-3.2.2-9]
+    ?assertEqual(1, maps:get('Maximum-QoS', Connack3)),  %% [MQTT-3.2.2-9]
 
     {ok, _, [0]} = emqtt:subscribe(Client3, Topic, 0),  %% [MQTT-3.2.2-10]
     {ok, _, [1]} = emqtt:subscribe(Client3, Topic, 1),  %% [MQTT-3.2.2-10]
@@ -430,6 +455,7 @@ t_connack_max_qos_allowed(_) ->
 
     {ok, _} = emqtt:publish(Client3, Topic, <<"Unsupported Qos 2">>, qos2),
     ?assertEqual(155, receive_disconnect_reasoncode()), %% [MQTT-3.2.2-11]
+    waiting_client_process_exit(Client3),
 
     {ok, Client4} = emqtt:start_link([
                                         {proto_ver, v5},
@@ -439,11 +465,8 @@ t_connack_max_qos_allowed(_) ->
                                         {will_qos, 2}
                                         ]),
     {error, Connack4} = emqtt:connect(Client4),
-    ?assertMatch({qos_not_supported,_ }, Connack4),     %% [MQTT-3.2.2-12]
-    receive
-        {'EXIT', _, {shutdown,qos_not_supported}} -> ok
-    after 100 -> error("t_connack_max_qos_allowed")
-    end,
+    ?assertMatch({qos_not_supported, _}, Connack4),     %% [MQTT-3.2.2-12]
+    waiting_client_process_exit(Client4),
 
     %% max_qos_allowed = 2
     emqx_zone:set_env(external, max_qos_allowed, 2),
@@ -452,12 +475,10 @@ t_connack_max_qos_allowed(_) ->
 
     {ok, Client5} = emqtt:start_link([{proto_ver, v5}]),
     {ok, Connack5} = emqtt:connect(Client5),
-    ?assertEqual(2, maps:get('Maximum-QoS',Connack5)),  %% [MQTT-3.2.2-9]
+    ?assertEqual(undefined, maps:get('Maximum-QoS', Connack5, undefined)),  %% [MQTT-3.2.2-9]
     ok = emqtt:disconnect(Client5),
+    waiting_client_process_exit(Client5),
 
-    receive {'EXIT', _, _} -> ok
-    after 100 -> ok
-    end,
     process_flag(trap_exit, false).
 
 t_connack_assigned_clienid(_) ->
@@ -499,10 +520,8 @@ t_publish_wildtopic(_) ->
     {ok, _} = emqtt:connect(Client1),
     ok = emqtt:publish(Client1, Topic, <<"error topic">>),
     ?assertEqual(144, receive_disconnect_reasoncode()),
+    waiting_client_process_exit(Client1),
 
-    receive {'EXIT', _, _} -> ok
-    after 100 -> ok
-    end,
     process_flag(trap_exit, false).
 
 t_publish_payload_format_indicator(_) ->
@@ -525,6 +544,7 @@ t_publish_topic_alias(_) ->
     {ok, _} = emqtt:connect(Client1),
     ok = emqtt:publish(Client1, Topic, #{'Topic-Alias' => 0}, <<"Topic-Alias">>, [{qos, ?QOS_0}]),
     ?assertEqual(148, receive_disconnect_reasoncode()),  %% [MQTT-3.3.2-8]
+    waiting_client_process_exit(Client1),
 
     {ok, Client2} = emqtt:start_link([{proto_ver, v5}]),
     {ok, _} = emqtt:connect(Client2),
@@ -533,10 +553,8 @@ t_publish_topic_alias(_) ->
     ok = emqtt:publish(Client2, <<"">>, #{'Topic-Alias' => 233}, <<"Topic-Alias">>, [{qos, ?QOS_0}]),
     ?assertEqual(2, length(receive_messages(2))),   %% [MQTT-3.3.2-12]
     ok = emqtt:disconnect(Client2),
+    waiting_client_process_exit(Client2),
 
-    receive {'EXIT', _, _} -> ok
-    after 100 -> ok
-    end,
     process_flag(trap_exit, false).
     
 t_publish_response_topic(_) ->
@@ -547,10 +565,8 @@ t_publish_response_topic(_) ->
     {ok, _} = emqtt:connect(Client1),
     ok = emqtt:publish(Client1, Topic, #{'Response-Topic' => nth(1, ?WILD_TOPICS)}, <<"Response-Topic">>, [{qos, ?QOS_0}]),
     ?assertEqual(130, receive_disconnect_reasoncode()),  %% [MQTT-3.3.2-14]
+    waiting_client_process_exit(Client1),
 
-    receive {'EXIT', _, _} -> ok
-    after 100 -> ok
-    end,
     process_flag(trap_exit, false).
 
 t_publish_properties(_) ->
@@ -588,6 +604,33 @@ t_publish_overlapping_subscriptions(_) ->
 %%--------------------------------------------------------------------
 %% Subsctibe
 %%--------------------------------------------------------------------
+
+t_subscribe_topic_alias(_) ->
+    Topic1 = nth(1, ?TOPICS),
+    Topic2 = nth(2, ?TOPICS),
+    {ok, Client1} = emqtt:start_link([{proto_ver, v5},
+                                      {properties, #{'Topic-Alias-Maximum' => 1}}    
+                                    ]),
+    {ok, _} = emqtt:connect(Client1),
+    {ok, _, [2]} = emqtt:subscribe(Client1, Topic1, qos2),
+    {ok, _, [2]} = emqtt:subscribe(Client1, Topic2, qos2),
+
+    ok = emqtt:publish(Client1, Topic1, #{}, <<"Topic-Alias">>, [{qos, ?QOS_0}]),
+    [Msg1] = receive_messages(1),
+    ?assertEqual({ok, #{'Topic-Alias' => 1}}, maps:find(properties, Msg1)),
+    ?assertEqual({ok, Topic1}, maps:find(topic, Msg1)),
+
+    ok = emqtt:publish(Client1, Topic1, #{}, <<"Topic-Alias">>, [{qos, ?QOS_0}]),
+    [Msg2] = receive_messages(1),
+    ?assertEqual({ok, #{'Topic-Alias' => 1}}, maps:find(properties, Msg2)),
+    ?assertEqual({ok, <<>>}, maps:find(topic, Msg2)),
+
+    ok = emqtt:publish(Client1, Topic2, #{}, <<"Topic-Alias">>, [{qos, ?QOS_0}]),
+    [Msg3] = receive_messages(1),
+    ?assertEqual({ok, #{}}, maps:find(properties, Msg3)),
+    ?assertEqual({ok, Topic2}, maps:find(topic, Msg3)),
+
+    ok = emqtt:disconnect(Client1).
 
 t_subscribe_no_local(_) ->
     Topic = nth(1, ?TOPICS),

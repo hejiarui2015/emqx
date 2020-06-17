@@ -30,6 +30,8 @@
 
 -export([ new/1
         , new/2
+        , ensure/1
+        , ensure/2
         , all/0
         ]).
 
@@ -203,6 +205,17 @@ new(gauge, Name) ->
     create(gauge, Name);
 new(counter, Name) ->
     create(counter, Name).
+
+-spec(ensure(metric_name()) -> ok).
+ensure(Name) ->
+    ensure(counter, Name).
+
+-spec(ensure(gauge|counter, metric_name()) -> ok).
+ensure(Type, Name) when Type =:= gauge; Type =:= counter ->
+    case ets:lookup(?TAB, Name) of
+        [] -> create(Type, Name);
+        _ -> ok
+    end.
 
 %% @private
 create(Type, Name) ->
@@ -520,11 +533,12 @@ reserved_idx('client.connect')               -> 200;
 reserved_idx('client.connack')               -> 201;
 reserved_idx('client.connected')             -> 202;
 reserved_idx('client.authenticate')          -> 203;
-reserved_idx('client.auth.anonymous')        -> 204;
-reserved_idx('client.check_acl')             -> 205;
-reserved_idx('client.subscribe')             -> 206;
-reserved_idx('client.unsubscribe')           -> 207;
-reserved_idx('client.disconnected')          -> 208;
+reserved_idx('client.enhanced_authenticate') -> 204;
+reserved_idx('client.auth.anonymous')        -> 205;
+reserved_idx('client.check_acl')             -> 206;
+reserved_idx('client.subscribe')             -> 207;
+reserved_idx('client.unsubscribe')           -> 208;
+reserved_idx('client.disconnected')          -> 209;
 
 reserved_idx('session.created')              -> 220;
 reserved_idx('session.resumed')              -> 221;
